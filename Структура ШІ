@@ -1,0 +1,74 @@
+-- 1.Створення об'єкта (класу) та переліку станів
+local NPC = {}
+NPC.__index = NPC
+
+-- Наші стани
+local States = {
+	Idle = "Idle",
+	Patrol = "Patrol",
+	Chase = "Chase",
+	Attack = "Attack"
+}
+-- 2.Конструктор бота
+function NPC.new(humanoidModel)
+	local self = setmetatable({}, NPC)
+	self.Model = humanoidModel
+	local h = humanoidModel:FindFirstChildOfClass("Humanoid")
+	self.Humanoid = h
+	self.RootPart = humanoidModel:FindFirstChild("HumanoidRootPart")
+	
+	self.CurrentState = States.Idle -- Початковий стан
+	self.Target = nil -- Поточна ціль для переслідування
+	
+	return self
+end
+
+-- 3. Зміна станів
+function NPC:Update()
+	if not self.RootPart or self.Humanoid.Health <= 0 then return end
+	
+	-- 1. Знаходимо найближчого гравця (математика дистанції)
+	local closestPlayer, distance = self:FindClosestPlayer()
+	
+	-- 2. Логіка перемикання станів (Переходи)
+	if self.CurrentState == States.Idle or self.CurrentState == States.Patrol then
+		if closestPlayer and distance < 50 then
+			self.CurrentState = States.Chase
+			self.Target = closestPlayer
+		end
+	elseif self.CurrentState == States.Chase then
+		if not closestPlayer or distance > 80 then
+			self.CurrentState = States.Patrol
+			self.Target = nil
+		elseif distance < 5 then
+			self.CurrentState = States.Attack
+		end
+	elseif self.CurrentState == States.Attack then
+		if distance > 7 then
+			self.CurrentState = States.Chase -- якщо гравець відбіг, знову біжимо за ним
+		end
+	end
+	
+	-- 4.Виконання логіки поточного стану
+	self:ExecuteStateLogic(distance)
+end
+
+function NPC:ExecuteStateLogic(distance)
+	if self.CurrentState == States.Idle then
+		-- Просто стоїмо
+	elseif self.CurrentState == States.Patrol then
+		-- Код для випадкового ходіння по точках
+	elseif self.CurrentState == States.Chase then
+		-- Оновлюємо біг за гравцем
+		if self.Target and self.Target.Character then
+			local targetRoot = self.Target.Character:FindFirstChild("HumanoidRootPart")
+			if targetRoot then
+				-- Старий прямолінійний метод (тимчасово для прикладу)
+				self.Humanoid:MoveTo(targetRoot.Position) 
+			end
+		end
+	elseif self.CurrentState == States.Attack then
+		-- Анімація удару та зняття ХП
+		print("💥 Бот атакує гравця!")
+	end
+end
