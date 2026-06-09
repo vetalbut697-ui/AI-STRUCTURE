@@ -1,0 +1,82 @@
+local Players = game:GetService("Players")
+local PathfindingService = game:GetService("PathfindingService")-- Сервіс для рорахунку шляху
+
+local npc = script.Parent
+local humanoid = npc:WaitForChild("Humanoid")
+local rootPart = npc:WaitForChild("HumanoidRootPart")
+
+-- Вмикаємо стрибки
+humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
+
+-- Фіксуємо фізику за сервером
+for _, part in pairs(npc:GetChildren()) do
+	if part:IsA("BasePart") then
+		part:SetNetworkOwner(nil)
+	end
+end
+
+-- Налаштування для прораховувача шляху, щоб він розумів ширину, висоту та здатність стрибати у моделі бота
+local path = PathfindingService:CreatePath({
+	AgentRadius = 2,-- шрина
+	AgentHeight = 5, -- висота
+	AgentCanJump = false -- Для великих стін стрибати не треба, їх треба обходити!
+})
+
+while true do
+	task.wait() -- Швидкий цикл
+
+	local player = Players:GetPlayers()[1]-- Тестуємо на першому гравці
+	if player and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then -- якщо прогружений гравець, його персонаж та його HumanoidRootPart
+		local targetRoot = player.Character.HumanoidRootPart
+
+		-- 1. СЕНСОР СТРИБКА ТА ПЕРЕШКОД
+		local directionToPlayer = (targetRoot.Position - rootPart.Position).Unit
+		local raycastOrigin = rootPart.Position - Vector3.new(0, 1.5, 0)
+		local raycastDirection = directionToPlayer * 10 -- Дивимося трохи далі (на 10 студів)
+
+		local raycastParams = RaycastParams.new()
+		raycastParams.FilterDescendantsInstances = {npc}
+		raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+
+		local raycastResult = workspace:Raycast(raycastOrigin, raycastDirection, raycastParams)
+
+		-- Створюємо змінну-рішення: за замовчуванням обходити стіну НЕ треба
+		local needToGoAround = false
+
+		if raycastResult and raycastResult.Instance then -- якщо лазер у щось влучив
+			local obstacleHeight = raycastResult.Instance.Size.Y -- висота стіни
+
+			if obstacleHeight <= 3.5 then -- Перевірка чи це стіна чи це забор
+				-- СТІНА МАЛЕНЬКА: Просто стрибаємо через неї на бігу
+				if humanoid.FloorMaterial ~= Enum.Material.Air then
+					print("🧱 Маленький блок (".. obstacleHeight .."). СТРИБАЮ!")
+					humanoid.Jump = true
+				end
+			else
+				-- СТІНА ВЕЛИКА: Вмикаємо режим обходу
+				print("🏢 Велика стіна (".. obstacleHeight .."). Треба обходити!")
+				needToGoAround = true
+			end
+		end
+
+		-- 2. Якщо ж лазер виявив стіну
+		if needToGoAround then
+			path:ComputeAsync(rootPart.Position, targetRoot.Position)--будування шляху по точках
+			local waypoints = path:GetWaypoints()--отримання точок
+
+			if path.Status == Enum.PathStatus.Success and #waypoints > 0 then -- якщо шлях прораховано, а величина точок більша за 0 
+				local nextWaypoint = waypoints[2] -- беремо другу точку(тобі ж наступну після першої, що вже лежить на хуманоїді)
+				if nextWaypoint then-- перевірка чи наступна точка існує
+					humanoid:MoveTo(nextWaypoint.Position)
+				end
+			else
+				-- Якщо Pathfinding не зміг порахувати, біжимо хоч якось прямо
+				humanoid:MoveTo(targetRoot.Position)
+			end
+		else
+			-- Якщо великої стіни немає — летимо напролом по прямій!
+			humanoid:MoveTo(targetRoot.Position)
+		end
+
+	end
+end
