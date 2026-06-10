@@ -1,0 +1,185 @@
+local Players = game:GetService("Players")
+local PathfindingService = game:GetService("PathfindingService")
+
+local NPC = {}
+NPC.__index = NPC
+
+-- 1. Перелік станів
+local States = {
+	Idle = "Idle",
+	Patrol = "Patrol",
+	Chase = "Chase",
+	Attack = "Attack"
+}
+
+-- Константи ШІ (налаштування балансу)
+local AGGRO_RANGE = 25
+local ATTACK_RANGE = 4.5
+local DAMAGE = 20
+local ATTACK_COOLDOWN = 1.5
+
+-- 2. Конструктор бота
+function NPC.new(humanoidModel)
+	local self = setmetatable({}, NPC)
+
+	self.Model = humanoidModel
+	self.Humanoid = humanoidModel:WaitForChild("Humanoid")
+	self.RootPart = humanoidModel:WaitForChild("HumanoidRootPart")
+
+	-- Стани ШІ
+	self.CurrentState = States.Patrol -- Починаємо з патруля
+	self.Target = nil
+	self.LastAttackTime = 0
+
+	-- Налаштування точок патрулювання
+	local patrolFolder = workspace:WaitForChild("PatrolWaypoints")
+	self.PatrolPoints = patrolFolder:GetChildren()
+	table.sort(self.PatrolPoints, function(a, b) return a.Name < b.Name end)
+	self.CurrentPatrolIndex = 1
+
+	-- Налаштування картографа для великих стін
+	self.Pathfinder = PathfindingService:CreatePath({
+		AgentRadius = 2, AgentHeight = 5, AgentCanJump = false
+	})
+
+	-- 🔥 Магічні фікси «із заводу»
+	self.Humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
+	for _, part in pairs(humanoidModel:GetChildren()) do
+		if part:IsA("BasePart") then part:SetNetworkOwner(nil) end
+	end
+
+	return self
+end
+
+-- 3. Допоміжна функція пошуку найближчого гравця
+function NPC:FindClosestPlayer()
+	local closestPlayer = nil
+	local shortestDistance = AGGRO_RANGE
+
+	for _, player in pairs(Players:GetPlayers()) do
+		if player.Character and player.Character:FindFirstChild("Humanoid") and player.Character.Humanoid.Health > 0 then
+			local targetRoot = player.Character:FindFirstChild("HumanoidRootPart")
+			if targetRoot then
+				local distance = (targetRoot.Position - self.RootPart.Position).Magnitude
+				if distance < shortestDistance then
+					shortestDistance = distance
+					closestPlayer = player
+				end
+			end
+		end
+	end
+	return closestPlayer, shortestDistance
+end
+
+-- 4. Менеджер зміни станів (Переходи)
+function NPC:Update()
+	if not self.RootPart or self.Humanoid.Health <= 0 then return end
+
+	local closestPlayer, distance = self:FindClosestPlayer()
+
+	-- Логіка перемикання станів
+	if closestPlayer then
+		if distance <= ATTACK_RANGE then
+			if self.CurrentState ~= States.Attack then
+				self.CurrentState = States.Attack
+				print("⚔️ Перехід в: АТАКА")
+			end
+		else
+			if self.CurrentState ~= States.Chase then
+				self.CurrentState = States.Chase
+				self.Target = closestPlayer
+				print("🎯 Перехід в: ПОГОНЯ")
+			end
+		end
+	else
+		if self.CurrentState ~= States.Patrol then
+			self.CurrentState = States.Patrol
+			self.Target = nil
+			print("🏳️ Перехід в: ПАТРУЛЬ")
+		end
+	end
+
+	-- Виконуємо дію поточного стану
+	self:ExecuteStateLogic(distance)
+end
+
+-- 5. Фізичне виконання логіки поточного стану
+function NPC:ExecuteStateLogic(distance)
+	if self.CurrentState == States.Patrol then
+		-- --- КОД ПАТРУЛЮВАННЯ ---
+		local currentTargetPart = self.PatrolPoints[self.CurrentPatrolIndex]
+		if currentTargetPart then
+			self.Humanoid:MoveTo(currentTargetPart.Position)
+
+			local distToWaypoint = (currentTargetPart.Position - self.RootPart.Position).Magnitude
+			if distToWaypoint < 4 then
+				self.CurrentPatrolIndex = self.CurrentPatrolIndex + 1
+				if self.CurrentPatrolIndex > #self.PatrolPoints then
+					self.CurrentPatrolIndex = 1
+				end
+			end
+		end
+
+	elseif self.CurrentState == States.Chase and self.Target then
+		-- --- НАШ РОБОЧИЙ ГІБРИДНИЙ КОД ПОГОНІ ---
+		local targetRoot = self.Target.Character.HumanoidRootPart
+
+		-- Лазерний сенсор
+		local directionToPlayer = (targetRoot.Position - self.RootPart.Position).Unit
+		local raycastOrigin = self.RootPart.Position - Vector3.new(0, 1.5, 0)
+		local raycastDirection = directionToPlayer * 5
+
+		local raycastParams = RaycastParams.new()
+		raycastParams.FilterDescendantsInstances = {self.Model}
+		raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+
+		local raycastResult = workspace:Raycast(raycastOrigin, raycastDirection, raycastParams)
+		local needToGoAround = false
+
+		if raycastResult and raycastResult.Instance then
+			local obstacleHeight = raycastResult.Instance.Size.Y
+			if obstacleHeight <= 3.5 then
+				if self.Humanoid.FloorMaterial ~= Enum.Material.Air then 
+					self.Humanoid.Jump = true 
+				end
+			else
+				needToGoAround = true
+			end
+		end
+
+		if needToGoAround then
+			self.Pathfinder:ComputeAsync(self.RootPart.Position, targetRoot.Position)
+			local waypoints = self.Pathfinder:GetWaypoints()
+			if self.Pathfinder.Status == Enum.PathStatus.Success and #waypoints > 0 then
+				local nextWaypoint = waypoints[2]
+				if nextWaypoint then self.Humanoid:MoveTo(nextWaypoint.Position) end
+			else
+				self.Humanoid:MoveTo(targetRoot.Position)
+			end
+		else
+			self.Humanoid:MoveTo(targetRoot.Position)
+		end
+
+	elseif self.CurrentState == States.Attack and self.Target then
+		-- --- КОД АТАКИ ТА ШКОДИ ---
+		self.Humanoid:MoveTo(self.RootPart.Position) -- Зупиняємо бота
+
+		local currentTime = os.clock()
+		if currentTime - self.LastAttackTime >= ATTACK_COOLDOWN then
+			local targetHumanoid = self.Target.Character:FindFirstChild("Humanoid")
+			if targetHumanoid then
+				print("💥 БОМ! Наніс " .. DAMAGE .. " шкоди через ООП!")
+				targetHumanoid:TakeDamage(DAMAGE)
+				self.LastAttackTime = currentTime
+			end
+		end
+	end
+end
+
+-- 6. ЗАПУСК БОТА (Головний моторчик скрипту)
+local myBot = NPC.new(script.Parent)
+
+while true do
+	task.wait(0.05)
+	myBot:Update() -- Смикаємо оновлення бота 20 разів на секунду
+end
