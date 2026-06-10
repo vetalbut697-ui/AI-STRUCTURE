@@ -177,7 +177,7 @@ function NPC:ExecuteStateLogic(distance)
 end
 
 -- 6. ЗАПУСК БОТА (Головний моторчик скрипту)
-local myBot = NPC.new(script.Parent)
+local myBot = NPC.new(script.Parent)-- вказується, яка саме модель буде рухатсь як нєпісь
 
 while true do
 	task.wait(0.05)
